@@ -6,3 +6,4 @@
 *.Rout
 meetup-jobs.html
 .~lock*
+members.Rdata
