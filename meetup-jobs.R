@@ -7,6 +7,7 @@ library(RCurl)
 library(rjson)
 library(plyr)
 library(lubridate)
+library(whisker)
 
 #tt <- tktoplevel()
 
@@ -19,6 +20,32 @@ groupname = "Data-Science-DC"
 page.size = 200 # not sure why this can't be higher...
 
 csvfilename <- "meetup-jobs.csv"
+htmlfilename <- "meetup-jobs.html"
+
+header <- '
+<!DOCTYPE html>
+<html>
+<body>
+
+<table border="0">
+<tr>
+  <th></th>
+  <th>Meetup name</th>
+  <th>URL</th>
+  <th>Announcement</th>
+</tr>
+'
+rowspec <- '<tr>
+  <td><img src="%s" width="100" height="100"></td>
+  <td><strong>%s</strong></td>
+  <td><code>%s</code></td>
+  <td>%s</td>
+    </tr>'
+footer <- "
+</table>
+</body>
+</html>
+"
 
 # get our group info
 getGroup <- function (api, api.key, curl, groupname) {
@@ -58,12 +85,13 @@ members <- ldply(seq.int(from=0, to=floor(group$members/page.size)),
 last_updated <- as.POSIXct(Sys.time() - years(1))
 photos <- data.frame(username=character(0), url=character(0)) # map from Meetup name to URL
 while (1) {
-  mod_date <- file.info(csvfilename)$mtime
+  csvinfo <- file.info(csvfilename)
   
-  if (mod_date > last_updated) {
-    last_updated <- mod_date
+  if (csvinfo$mtime > last_updated && csvinfo$size > 0) {
+    last_updated <- csvinfo$mtime
     
     announcements <- read.csv(csvfilename)
+    if (nrow(announcements) == 0) next
     
     unknown_names <- setdiff(announcements$username, photos$username)
     
@@ -72,7 +100,7 @@ while (1) {
       if (length(rows) == 1) {
         # have a single name -- get the URL (could be NA)
         message("Adding ", name, " to photos DF")
-        photos <- rbind(photos, data.frame(username=name, url=members$photo[[rows]]))
+        photos <- rbind(photos, data.frame(username=name, photo=members$photo[[rows]]))
       } else if (length(rows) == 0) {
         warning("Name ", name, " is not found -- skipping")
       } else {
@@ -82,49 +110,21 @@ while (1) {
     
     export <- join(announcements, photos, by='username', type='left')
     print(export)
+    
+    html <- file(htmlfilename, "w")
+    
+    cat(header, file=html)
+    a_ply(export, 1, function(rr) cat(sprintf(rowspec, 
+                                              URLencode(rr$photo), 
+                                              whisker.escape(rr$user),
+                                              whisker.escape(rr$url),
+                                              whisker.escape(rr$announcement)),
+                                      file=html))
+    cat(footer, file=html)
+    
+    close(html)
     # 
   }
   
   Sys.sleep(5)
 }
-
-# while (1) {
-#   username <- readline("Meetup user name: ")
-#   coname <-   readline("Company name    : ")
-#   jobtitle <- readline("Job title       : ")
-#   
-#   if (username == "") break
-#   
-#   # is this a Meetup user?
-#   rows <- agrep(username, members$name)
-#   if (length(rows) > 1) {
-#     message("Do you mean one of these?")
-#     print(members[rows,c("name", "bio")])
-#     thisrow <- readline("Row name/number: ")
-#     if (!is.na(thisrow) && thisrow %in% rownames(members[rows,])) {
-#       rows <- which(thisrow == rownames(members))
-#     }
-#   }
-#   if (length(rows) == 1) {
-#     username <- members$name[rows]
-#     photourl <- members$url[rows]
-#   } else {
-#     message("No matching user!")
-#     next
-#   }
-#   
-#   # if it's OK
-#   if (TRUE) {
-#     yn <- readline(sprintf("Add %s, %s, %s? (y/n/q) ", username, coname, jobtitle))
-#     if (tolower(yn) == 'y') {
-#       #jobs <- rbind(jobs, data.frame(username, coname, jobtitle))
-#       
-#       # can we pull a photo?
-#       
-#       # update screen
-#       tkgrid(tklabel(tt,text=sprintf("%s, %s, %s", username, coname, jobtitle)))
-#     } else if (tolower(yn) == 'q') {
-#       break
-#     }
-#   }
-# }
