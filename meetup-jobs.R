@@ -19,14 +19,15 @@ groupname = "Data-Science-DC"
 
 page.size = 200 # not sure why this can't be higher...
 
-csvfilename <- "meetup-jobs.csv"
+#csvfilename <- "meetup-jobs.csv"
+csvurl <- 'https://docs.google.com/spreadsheet/pub?key=0AnaXKp9bt6OXdHZRdmJ3eHIzYWNiOUh3a2c2ckdWQ2c&single=true&gid=0&output=csv'
 htmlfilename <- "meetup-jobs.html"
 
-header <- '
+headerspec <- '
 <!DOCTYPE html>
 <html>
 <head>
-<meta http-equiv="refresh" content="3">
+<meta http-equiv="refresh" content="%d">
 <style>
 td.name {font-family:serif; font-weight:bold;}
 td.url {font-family:monospace;}
@@ -58,7 +59,7 @@ footer <- "
 "
 
 membersfile = 'members.Rdata'
-if (!file.exists(membersfile) || file.info(csvfilename)$mtime < as.POSIXct(Sys.time() - hours(1))) {
+if (!file.exists(membersfile) || file.info(membersfile)$mtime < as.POSIXct(Sys.time() - hours(1))) {
   # get our group info
   getGroup <- function (api, api.key, curl, groupname) {
     service = "2/groups"
@@ -94,18 +95,29 @@ if (!file.exists(membersfile) || file.info(csvfilename)$mtime < as.POSIXct(Sys.t
 
 #jobs <- data.frame(username=character(), coname=character(), jobtitle=character())
 
-# new data flow: watch the CSV file. when it changes, pull it, pull any new 
-# photo URLs, and rebuild the HTML
+# new data flow: pull the CSV file. If it's different, store the change time and 
+# regenerate the HTML file, pulling any new photos. 
+# If the change time is >5 mins, use a 5-minute refresh. If 
+# it's new, use a 5-second refresh.
+
 last_updated <- as.POSIXct(Sys.time() - years(1))
+last_csv <- ''
+cycle_time <- 60*15 # 15 minutes
 photos <- data.frame(username=character(0), url=character(0)) # map from Meetup name to URL
+
 while (1) {
-  csvinfo <- file.info(csvfilename)
-  
-  if (csvinfo$mtime > last_updated && csvinfo$size > 0) {
-    last_updated <- csvinfo$mtime
+  message("pulling the CSV file")
+  csv_str <- getURL(csvurl, curl=curl)
+  message(csv_str)
+  if (csv_str != last_csv) {
+    message("got a new CSV file; fast poll mode")
+    last_updated <- Sys.time()
+    last_csv <- csv_str
+    cycle_time <- 5 # 5 seconds
     
-    announcements <- read.csv(csvfilename)
+    announcements <- read.csv(textConnection(csv_str))
     if (nrow(announcements) == 0) next
+    names(announcements) <- c('timestamp', 'username', 'displayname', 'url', 'announcement', 'order')
     
     unknown_names <- setdiff(announcements$username, photos$username)
     
@@ -128,15 +140,16 @@ while (1) {
     }
     
     export <- join(announcements, photos, by='username', type='left')
-    export <- export[seq.int(nrow(export),1),] # new stuff at the top
+    export <- subset(export, order>0)
+    export <- export[order(export$order, na.last=NA),] # use specified order
     #print(export)
     
     html <- file(htmlfilename, "w")
     
-    cat(header, file=html)
+    cat(sprintf(headerspec, cycle_time), file=html)
     a_ply(export, 1, function(rr) cat(sprintf(rowspec, 
                                               URLencode(rr$photo), 
-                                              whisker.escape(if (rr$displayname=='') rr$user else rr$displayname),
+                                              whisker.escape(if (is.na(rr$displayname)) rr$username else rr$displayname),
                                               whisker.escape(rr$url),
                                               whisker.escape(rr$announcement)),
                                       file=html))
@@ -146,5 +159,12 @@ while (1) {
     # 
   }
   
-  Sys.sleep(5)
+  # if we haven't been updated in a while, sleep a lot longer
+  if (last_updated + minutes(5) < Sys.time()) {
+    message("slow poll mode")
+    cycle_time <- 60*15 # 15 minutes
+  }
+  
+  message(sprintf("sleeping for %d seconds", cycle_time))
+  Sys.sleep(cycle_time)
 }
